@@ -1,4 +1,5 @@
 #lang racket
+(require (for-syntax syntax/parse))
 
 #;(define-grammar ldw::model
     [
@@ -11,37 +12,45 @@
 
 (define-syntax define-model
   (λ (stx)
-    (define (map-operations stx)
-      (define (op stx)
-        (define (td stx)
-          (syntax-case stx (integer string boolean product sum opt seq set map enum)
-            [(product (name type) ...)
-             #`(product-type (list
-                              #,@(for/list ([n (syntax->list #'(name ...))]
-                                            [t (syntax->list #'(type ...))])
-                                   #`(product-type-member '#,n #,(td t)))))]
-            [(sum name ...) #'(sum-type (list (type-reference 'name) ...))]
-            [(opt value-type) #`(opt-type #,(td #'value-type))]
-            [(seq value-type) #`(seq-type #,(td #'value-type))]
-            [(set value-type) #`(set-type #,(td #'value-type))]
-            [(map key-type value-type) #`(map-type #,(td #'key-type) #,(td #'value-type))]
-            [(enum s ...) #'(enum-type (list s ...))]
-            [integer #'(integer-type)]
-            [string #'(string-type)]
-            [boolean #'(boolean-type)]
-            [name #'(type-reference 'name)]))
-        (syntax-case stx (+ -)
-          [(- name) #'(type-deletion 'name)]
-          [(- name s) (string? (syntax->datum #'s)) #'(enum-member-deletion 'name s)]
-          [(- name field-name-or-name) #'(member-deletion 'name 'field-name-or-name)]
-          [(+ name (field-name type)) #`(product-addition 'name (product-type-member 'field-name #,(td #'type)))]
-          [(+ name s) (string? (syntax->datum #'s)) #'(enum-addition 'name s)]
-          [(+ name member-name) #'(sum-addition 'name (type-reference 'member-name))]
-          [(name type) #`(definition 'name #,(td #'type))]))
-      (map op (syntax->list stx)))
-    (syntax-case stx ()
-      [(_ name operations) #`(model 'name #f (list #,@(map-operations #'operations)))]
-      [(_ name super operations) #`(model 'name 'super (list #,@(map-operations #'operations)))])))
+    (define (parse-operation stx)
+      (define (parse-type stx)
+        (syntax-case stx (integer string boolean product sum opt seq set map enum)
+          ; Core structural types
+          [(product (name type) ...)
+           #`(product-type
+              (list #,@(map (λ (name type) #`(product-type-member '#,name #,(parse-type type)))
+                            (syntax->list #'(name ...))
+                            (syntax->list #'(type ...)))))]
+          [(sum name ...) #'(sum-type (list (type-reference 'name) ...))]
+          ; Generic types
+          [(opt value-type) #`(opt-type #,(parse-type #'value-type))]
+          [(seq value-type) #`(seq-type #,(parse-type #'value-type))]
+          [(set value-type) #`(set-type #,(parse-type #'value-type))]
+          [(map key-type value-type) #`(map-type #,(parse-type #'key-type) #,(parse-type #'value-type))]
+          ; Primitive types
+          [(enum s ...) #'(enum-type (list s ...))]
+          [integer #'(integer-type)]
+          [string #'(string-type)]
+          [boolean #'(boolean-type)]
+          ; Type references
+          [name #'(type-reference 'name)]))
+      (syntax-case stx (+ -)
+        ; Deletions
+        [(- name) #'(type-deletion 'name)]
+        [(- name s) (string? (syntax->datum #'s)) #'(enum-member-deletion 'name s)]
+        [(- name field-name-or-name) #'(member-deletion 'name 'field-name-or-name)]
+        ; Additions
+        [(+ name (field-name type)) #`(product-addition 'name (product-type-member 'field-name #,(parse-type #'type)))]
+        [(+ name s) (string? (syntax->datum #'s)) #'(enum-addition 'name s)]
+        [(+ name member-name) #'(sum-addition 'name (type-reference 'member-name))]
+        ; Definitions
+        [(name type) #`(definition 'name #,(parse-type #'type))]))
+    (syntax-parse stx
+      #:literals (extends)
+      [(_ name
+          (~optional (~seq extends (~describe #:role "predecessor model" "model name" super:id)) #:defaults ([super #'#f]))
+          [operation ...])
+       #`(define name (model 'name 'super (list #,@(map parse-operation (syntax->list #'(operation ...))))))])))
 
 (struct model (name extends operations) #:transparent)
 
@@ -76,24 +85,21 @@
 (struct boolean-type type () #:transparent)
 (struct type-reference type (name) #:transparent)
 
-(pretty-print
- (define-model ldw::model::parsed ldw::model::base
-   [
-    (<prod> (product (f1 string) (f2 boolean)))
-    (<sum> (sum <int-set> <prod>))
-    (<enum> (enum "a" "b" "c"))
-    (<int-set> (set integer))
-    (<string-bool-map> (map string boolean))
-    (<opt-prod> (opt <prod>))
-    (<seq-sum> (seq (sum <string-bool-map> <opt-prod>)))
+(define-model ldw::model::parsed extends ldw::model::base
+  ([<prod> (product (f1 string) (f2 boolean))]
+   [<sum> (sum <int-set> <prod>)]
+   [<enum> (enum "a" "b" "c")]
+   [<int-set> (set integer)]
+   [<string-bool-map> (map string boolean)]
+   [<opt-prod> (opt <prod>)]
+   [<seq-sum> (seq (sum <string-bool-map> <opt-prod>))]
 
-    ; (+ <name> (<field-name> string))
+   [- <seq-sum>]
+   [- <prod> f1]
+   [- <sum> <prod>]
+   [- <enum> "b"]
+   [+ <prod> (f3 integer)]
+   [+ <sum> <opt-prod>]
+   [+ <enum> "d"]))
 
-    ; Modification
-    ;  (- <name>)
-    ;  (- <product-or-sum-name> <field-name-or-name>)
-    ;  (- <enum-name> string)
-    ;  (+ <product-name> (<field-name> type))
-    ;  (+ <sum-name> <name>)
-    ;  (+ <enum-name> string)
-    ]))
+(pretty-print ldw::model::parsed)
