@@ -3,7 +3,7 @@
   "packages": ["path:racket-flake#libX11", "path:racket-flake#racket-minimal"],
   "shell": {
     "init_hook": [
-      "raco pkg install --batch --skip-installed --deps auto_seaarch rhombus racket-langserver fmt"
+      "raco pkg install --batch --skip-installed --deps search-auto rhombus racket-langserver fmt"
     ]
   }
 }
